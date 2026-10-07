@@ -385,6 +385,173 @@ class Schelling(Cell2D):
                 empty_before == int(np.sum(self.array == 0)),
             "Grid and agent records agree": bool(records_match)
         }
+
+    def check_marriage(self, pair_locations):
+        """Check marriage rules on a fresh p=0, m=1 test grid."""
+        if self.p != 0 or self.m != 1 or self.marriages_done != 0:
+            raise ValueError("Use a fresh test grid with p=0 and m=1.")
+        if self.fixed_openness is None or self.fixed_openness <= 0:
+            raise ValueError("Use positive fixed_openness for this check.")
+
+        test_pairs = [(self.people[a].id, self.people[b].id) for a, b in pair_locations.values()]
+        ab_openness = min(self.people[loc].openness for loc in pair_locations["AB"])
+        old_ids = set(self.people_by_id)
+        old_locations = set(self.people)
+        _, _, _, _, scores = self.count_neighbors()
+        self.update_happiness(scores)
+
+        # No eligible pairs during the first two neighbour rounds
+        rounds_ok = True
+        for _ in range(2):
+            self.update_neighbors()
+            rounds_ok = rounds_ok and not self.find_all_candidate_pairs()
+
+        # Six singles have 15 possible pairs after round three
+        self.update_neighbors()
+        possible_pairs = self.find_all_candidate_pairs()
+        rounds_ok = rounds_ok and len(possible_pairs) == 15
+
+        # An unhappy single must be excluded
+        person = self.people_by_id[test_pairs[0][0]]
+        person.happy = False
+        blocked = self.find_all_candidate_pairs()
+        unhappy_ok = (len(blocked) == 10 and all(person.id not in pair for pair in blocked))
+        person.happy = True
+
+        # Selected pairs must be valid and must not share an agent
+        selected = self.choose_marriage_pairs(possible_pairs)
+        selected_ids = [pid for pair in selected for pid in pair]
+        selection_ok = (len(selected) == 3 and len(selected_ids) == len(set(selected_ids))and set(selected) <= set(possible_pairs))
+
+        # m=0 must prevent selection, even when the limit allows marriage
+        self.m = 0
+        zero_m_ok = self.choose_marriage_pairs(possible_pairs) == []
+        self.m = 1
+
+        # Check selection and completion at the marriage limit
+        original_limit = self.marriage_limit
+        self.marriage_limit = 1
+        cap_ok = len(self.choose_marriage_pairs(possible_pairs)) == 1
+
+        self.marriage_limit = 0
+        cap_ok = cap_ok and self.choose_marriage_pairs(possible_pairs) == []
+        stopped = self.complete_marriages(test_pairs)
+        cap_ok = (cap_ok and stopped == 0 and self.marriages_done == 0 and set(self.people_by_id) == old_ids and set(self.people) == old_locations)
+        self.marriage_limit = original_limit
+
+        # Compare AA and AB pairs that share one A agent
+        same_pair = test_pairs[0]
+        cross_pair = tuple(sorted((same_pair[0], test_pairs[1][0])))
+        pair_options = [same_pair, cross_pair]
+
+        saved_openness = {
+            pid: person.openness
+            for pid, person in self.people_by_id.items()
+        }
+        saved_random_state = np.random.get_state()
+        shares = {}
+
+        for openness in (0.1, 1.0):
+            for person in self.people.values():
+                person.openness = openness
+
+            cross_count = 0
+            for seed in range(600):
+                np.random.seed(seed)
+                chosen = self.choose_marriage_pairs(pair_options)
+                cross_count += cross_pair in chosen
+
+            shares[openness] = cross_count / 600
+
+        # Restore the original settings
+        for pid, openness in saved_openness.items():
+            self.people_by_id[pid].openness = openness
+        np.random.set_state(saved_random_state)
+
+        weighting_ok = (
+            shares[0.1] < 0.04
+            and 0.40 < shares[1.0] < 0.60
+        )
+
+        # Specified pairs guarantee that AA, BB and AB are all tested
+        completed = self.complete_marriages(test_pairs)
+        types = {"AA": 3, "BB": 4, "AB": 5}
+        child_types = {"AA": (1,), "BB": (2,), "AB": (1, 2)}
+        household_checks = {}
+
+        for (name, locations), ids in zip(pair_locations.items(), test_pairs):
+            agents = [self.people[loc] for loc in locations]
+            households = [p for p in agents if p.group in (3, 4, 5)]
+            singles = [p for p in agents if p.group in (1, 2)]
+            correct = len(households) == 1 and len(singles) == 1
+
+            if correct:
+                household, single = households[0], singles[0]
+                openness_ok = (np.isclose(household.openness, ab_openness) if name == "AB" else household.openness is None)
+                correct = (
+                    household.group == types[name]
+                    and single.group in child_types[name]
+                    and set(household.member_ids) == set(ids)
+                    and openness_ok
+                    and np.isclose(single.openness, self.fixed_openness)
+                )
+
+            household_checks[f"{name} household and new single"] = bool(correct)
+
+        # Existing households must not become marriage candidates
+        # Retry old IDs while the marriage limit still allows more
+        array_before = self.array.copy()
+        ids_before = set(self.people_by_id)
+        counter_before = self.marriages_done
+
+        single_id = next(
+            person.id for person in self.people.values()
+            if person.group in (1, 2)
+        )
+
+        invalid_pairs = test_pairs + [(single_id, test_pairs[0][0])]
+        skipped = self.complete_marriages(invalid_pairs)
+
+        invalid_pairs_ok = (
+            counter_before < self.marriage_limit
+            and skipped == 0
+            and self.marriages_done == counter_before
+            and set(self.people_by_id) == ids_before
+            and np.array_equal(self.array, array_before)
+        )
+        _, _, _, _, scores = self.count_neighbors()
+        self.update_happiness(scores)
+        for _ in range(3):
+            self.update_neighbors()
+
+        new_pairs = self.find_all_candidate_pairs()
+        singles_only = (
+            len(new_pairs) == 3
+            and all(self.people_by_id[pid].group in (1, 2) for pair in new_pairs for pid in pair
+            )
+        )
+
+        records_ok = (
+            old_ids.isdisjoint(self.people_by_id)
+            and set(self.people) == old_locations
+            and set(locs_where(self.array != 0)) == old_locations
+            and len(self.people) == len(self.people_by_id) == len(old_ids)
+            and all(person.loc == loc
+                and person.group == self.array[loc]
+                and self.people_by_id.get(person.id) is person for loc, person in self.people.items()
+            )
+        )
+
+        checks = {
+            "Marriage eligibility": bool(rounds_ok and unhappy_ok and singles_only),
+            "Pair selection and marriage limit": bool(selection_ok and zero_m_ok and cap_ok)
+        }
+        checks["Openness affects pair selection"] = bool(weighting_ok)
+        checks["Invalid pairs are skipped"] = bool(invalid_pairs_ok)
+        checks.update(household_checks)
+        checks["Marriage counter"] = completed == self.marriages_done == 3
+        checks["Grid and agent records"] = bool(records_ok)
+        return checks
     
     def update_neighbors(self, advance_round=True):
         """Update every Person's current neighbors."""
