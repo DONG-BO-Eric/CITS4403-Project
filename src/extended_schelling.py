@@ -336,6 +336,55 @@ class Schelling(Cell2D):
             checks[f"Happiness at {loc}"] = (info["happy"] == (expected >= self.p))
 
         return checks
+
+    def check_relocation(self):
+        """Run one step with m=0 and check relocation."""
+        if self.m != 0:
+            raise ValueError("Use m=0 for relocation checks.")
+
+        # Calculate happiness before moving
+        _, _, _, _, satisfaction = self.count_neighbors()
+        self.update_happiness(satisfaction)
+
+        # Save each agent's information before moving
+        before = {person.id: person.get_info() for person in self.people.values()}
+        empty_before = int(np.sum(self.array == 0))
+
+        # Use the existing simulation step
+        self.step()
+
+        same_ids = set(before) == set(self.people_by_id)
+
+        happy_stay = same_ids and all(self.people_by_id[pid].loc == info["loc"] for pid, info in before.items() if info["happy"])
+
+        if empty_before > 0:
+            unhappy_correct = same_ids and all(self.people_by_id[pid].loc != info["loc"] for pid, info in before.items() if not info["happy"]
+            )
+        else:
+            unhappy_correct = same_ids and all(self.people_by_id[pid].loc == info["loc"] for pid, info in before.items() if not info["happy"]
+            )
+
+        residents_unchanged = same_ids and all(self.people_by_id[pid].group == info["group"] for pid, info in before.items())
+
+        occupied = set(locs_where(self.array != 0))
+        records_match = (
+            set(self.people) == occupied
+            and len(self.people) == len(self.people_by_id)
+            and all(person.loc == loc
+                    and person.group == self.array[loc]
+                    and self.people_by_id.get(person.id) is person for loc, person in self.people.items())
+        )
+
+        return {
+            "Happy agents stay": bool(happy_stay),
+            "Unhappy agents follow the vacancy rule":
+                bool(unhappy_correct),
+            "Agent IDs and groups unchanged":
+                bool(residents_unchanged),
+            "Empty-cell count unchanged":
+                empty_before == int(np.sum(self.array == 0)),
+            "Grid and agent records agree": bool(records_match)
+        }
     
     def update_neighbors(self, advance_round=True):
         """Update every Person's current neighbors."""
