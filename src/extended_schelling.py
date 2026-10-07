@@ -527,8 +527,7 @@ class Schelling(Cell2D):
         new_pairs = self.find_all_candidate_pairs()
         singles_only = (
             len(new_pairs) == 3
-            and all(self.people_by_id[pid].group in (1, 2) for pair in new_pairs for pid in pair
-            )
+            and all(self.people_by_id[pid].group in (1, 2) for pair in new_pairs for pid in pair)
         )
 
         records_ok = (
@@ -552,7 +551,7 @@ class Schelling(Cell2D):
         checks["Marriage counter"] = completed == self.marriages_done == 3
         checks["Grid and agent records"] = bool(records_ok)
         return checks
-    
+
     def update_neighbors(self, advance_round=True):
         """Update every Person's current neighbors."""
 
