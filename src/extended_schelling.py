@@ -127,7 +127,7 @@ class Schelling(Cell2D):
                        [1, 0, 1],
                        [1, 1, 1]], dtype=np.int8)
 
-    def __init__(self, n, p, m = 0.1, fixed_openness=None):
+    def __init__(self, n, p, m = 0.1, fixed_openness=None, initial_layout=None):
         """Initializes the attributes.
 
         n: number of rows -- size of the grid
@@ -143,7 +143,13 @@ class Schelling(Cell2D):
         # randomly initialize a grid of houses of n by, occupied by two kinds of agents (red and blue)
         # in roughly equal numbers. About 10% of the houses are empty.
         # in [0, 1, 2], o has 10% to be chosen, 1 and 2 each has 45% to be chosen.
-        self.array = np.random.choice(choices, (n, n), p=probs) # this line randomly assigns 0 / 1 / 2 to every cell
+        # Use a supplied layout, or generate a random grid.
+        if initial_layout is None:
+            self.array = np.random.choice(choices, (n, n), p=probs) # this line randomly assigns 0 / 1 / 2 to every cell
+        else:
+            self.array = np.array(initial_layout, dtype=np.int8, copy=True)
+            if self.array.shape != (n, n):
+                raise ValueError("initial_layout must be a square array of shape (n, n)")
 
         # The line above randomly assigned 0 (empty), 1 or 2 to every cell; now collect the information for each person
         # Dictionary: key = location, for example (3, 5) value = Person object
@@ -173,6 +179,35 @@ class Schelling(Cell2D):
         self.m = m
         self.marriage_limit = int(len(self.people) * m)
         self.marriages_done = 0
+
+    def check_initialization(self):
+        """Check a newly created model before any simulation steps."""
+
+        occupied = set(locs_where(self.array != 0))
+        ids = {person.id for person in self.people.values()}
+
+        locations_match = set(self.people) == occupied
+
+        records_match = locations_match and all(
+            person.loc == loc and person.group == self.array[loc]
+            for loc, person in self.people.items()
+        )
+
+        return {
+            "Only initial states (0, 1, 2)": set(np.unique(self.array)) <= {0, 1, 2},
+
+            "Population matches occupied cells": len(self.people) == len(occupied),
+
+            "Unique agent IDs": len(ids) == len(self.people),
+
+            "Grid and agent records agree": records_match,
+
+            "ID lookup agrees with agent records": set(self.people_by_id) == ids and all(self.people_by_id.get(person.id) is person for person in self.people.values()),
+
+            "Marriage limit is correct": self.marriage_limit == int(len(self.people) * self.m),
+
+            "No marriages yet": self.marriages_done == 0,
+        }
 
     def get_person_info(self, person_id):
         """Find a Person by ID and return that person's information."""
@@ -278,18 +313,30 @@ class Schelling(Cell2D):
         return np.nanmean(frac_same)
 
     def update_happiness(self, satisfaction):
-        """Update each Person's satisfaction and happy state."""
+        """Update satisfaction and happiness for every person."""
         # Update every person's satisfaction and happiness
 
         for loc, person in self.people.items():
-
             # satisfaction is how satisfied the person is at their current location
-            score = satisfaction[loc]
-            person.satisfaction = float(score)
+            person.update_happiness(satisfaction[loc], self.p)
 
-            # update whether each person is happy
-            person.happy = bool(score >= self.p)
+    def check_satisfaction(self, expected_scores):
+        """Compare model results with scores calculated by hand."""
+        _, _, _, _, satisfaction = self.count_neighbors()
+        self.update_happiness(satisfaction)
+        self.update_neighbors(advance_round=False)
 
+        checks = {}
+
+        for loc, expected in expected_scores.items():
+            info = self.people[loc].get_info()
+
+            checks[f"Satisfaction at {loc}"] = bool(np.isclose(info["satisfaction"], expected, rtol=0, atol=1e-12))
+
+            checks[f"Happiness at {loc}"] = (info["happy"] == (expected >= self.p))
+
+        return checks
+    
     def update_neighbors(self, advance_round=True):
         """Update every Person's current neighbors."""
 
