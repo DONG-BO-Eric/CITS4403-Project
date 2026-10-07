@@ -49,6 +49,9 @@ project-root/
 │   └── README.md                       # No external data; all results come from simulation
 ├── notebooks/
 │   └── extended_schelling_analysis.ipynb   # Model specification, experiments and results
+├── tests/
+│   ├── conftest.py
+│   └── test_extended_schelling.py      # Tests of the model rules and edge cases (pytest)
 ├── requirements.txt
 └── README.md
 ```
@@ -104,6 +107,24 @@ Model parameters:
 | `p` | Satisfaction threshold an occupant needs in order to stay | required |
 | `m` | Marriage parameter: per-step willingness probability and cap on total marriages | 0.1 |
 | `fixed_openness` | If set, every agent uses this openness instead of a random value in {0.1, …, 0.9} | `None` |
+
+## Testing
+
+The model rules are checked with `pytest`. From the project root:
+
+```bash
+pytest tests/
+```
+
+The tests cover initialisation, the satisfaction formula for every household type, the
+wrap-around boundary, agents with no neighbours, the happiness threshold, the segregation
+measure on layouts with known answers, relocation (including a full grid with no empty
+cells), neighbour tracking and marriage eligibility, openness-weighted pair selection, the
+marriage cap, household formation, run-level invariants and reproducibility with a fixed seed.
+
+One test is marked as an expected failure: if every agent has openness 0 and only
+cross-group pairs are available, all selection weights are 0 and pair selection raises an
+error. Openness must therefore be greater than 0; all experiments use openness of at least 0.1.
 
 ## Notebook guide
 

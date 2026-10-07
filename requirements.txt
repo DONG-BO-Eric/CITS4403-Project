@@ -7,3 +7,4 @@ seaborn
 empiricaldist
 ipython
 jupyter
+pytest
