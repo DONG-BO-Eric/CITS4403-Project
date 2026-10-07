@@ -1,0 +1,9 @@
+# Python 3.x (developed and run with Python 3.14)
+numpy
+scipy
+pandas
+matplotlib
+seaborn
+empiricaldist
+ipython
+jupyter
