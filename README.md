@@ -49,9 +49,6 @@ project-root/
 │   └── README.md                       # No external data; all results come from simulation
 ├── notebooks/
 │   └── extended_schelling_analysis.ipynb   # Model specification, experiments and results
-├── tests/
-│   ├── conftest.py
-│   └── test_extended_schelling.py      # Tests of the model rules and edge cases (pytest)
 ├── requirements.txt
 └── README.md
 ```
@@ -110,42 +107,29 @@ Model parameters:
 
 ## Testing
 
-The model rules are checked with `pytest`. From the project root:
-
-```bash
-pytest tests/
-```
-
-The tests cover initialisation, the satisfaction formula for every household type, the
-wrap-around boundary, agents with no neighbours, the happiness threshold, the segregation
-measure on layouts with known answers, relocation (including a full grid with no empty
-cells), neighbour tracking and marriage eligibility, openness-weighted pair selection, the
-marriage cap, household formation, run-level invariants and reproducibility with a fixed seed.
-
-One test is marked as an expected failure: if every agent has openness 0 and only
-cross-group pairs are available, all selection weights are 0 and pair selection raises an
-error. Openness must therefore be greater than 0; all experiments use openness of at least 0.1.
+Run the **Model testing** section of `notebooks/extended_schelling_analysis.ipynb` after the setup cells. It includes the main initialization, satisfaction, relocation and marriage checks, followed by grid reproducibility checks using the same parameters and seed.
 
 ## Notebook guide
 
 | Section | Content |
 |---|---|
 | 1–2 | Setup, and the full model specification with equations |
-| 3 | Initial openness distribution and grid evolution |
-| 4 | Calibration of the satisfaction threshold `p` (peak at `p` ≈ 0.76) |
-| 5 | Effect of `m` on pure-group cluster size at `p` = 0.76 |
-| 6 | How `p` changes the direction of the effect of `m` |
-| 7 | AB boundary fraction as a function of `m` |
-| 8 | AB boundary fraction as a function of uniform openness |
-| 9 | Openness × `m` heatmap of the AB boundary fraction |
-| 10 | Summary and limitations |
+| 3 | Model testing and initial openness distribution |
+| 4 | Grid evolution |
+| 5 | Calibration of the satisfaction threshold `p` (peak at `p` ≈ 0.76) |
+| 6 | Effect of `m` on pure-group cluster size at `p` = 0.76 |
+| 7 | How `p` changes the direction of the effect of `m` |
+| 8 | AB boundary fraction as a function of `m` |
+| 9 | AB boundary fraction as a function of uniform openness |
+| 10 | Openness × `m` heatmap of the AB boundary fraction |
+| 11 | Summary and limitations |
 
 ## Team and contributions
 
 | Member | Student number | Main contributions |
 |---|---|---|
-| ZHAO YANG ZHAO | 25120743 | Main model implementation (`src/extended_schelling.py`: `Person` and `Schelling` classes, relocation, marriage and openness mechanics); analysis of how the satisfaction threshold `p` affects segregation, including calibration of `p` (Notebook Sections 3–4) |
-| BO DONG | 24679419 | Analysis of clustering and AB-household bridging under different values of `m` and openness (Notebook Sections 5–9); restructuring of the repository; code-quality review; project report |
+| ZHAO YANG ZHAO | 25120743 | Main model implementation (`src/extended_schelling.py`: `Person` and `Schelling` classes, relocation, marriage and openness mechanics); analysis of how the satisfaction threshold `p` affects segregation, including calibration of `p` (Notebook Sections 4–5) |
+| BO DONG | 24679419 | Analysis of clustering and AB-household bridging under different values of `m` and openness (Notebook Sections 6–10); restructuring of the repository; code-quality review; project report |
 
 ## Acknowledgements
 

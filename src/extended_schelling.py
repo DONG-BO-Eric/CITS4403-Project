@@ -127,7 +127,7 @@ class Schelling(Cell2D):
                        [1, 0, 1],
                        [1, 1, 1]], dtype=np.int8)
 
-    def __init__(self, n, p, m = 0.1, fixed_openness=None):
+    def __init__(self, n, p, m = 0.1, fixed_openness=None, initial_layout=None):
         """Initializes the attributes.
 
         n: number of rows -- size of the grid
@@ -143,7 +143,13 @@ class Schelling(Cell2D):
         # randomly initialize a grid of houses of n by, occupied by two kinds of agents (red and blue)
         # in roughly equal numbers. About 10% of the houses are empty.
         # in [0, 1, 2], o has 10% to be chosen, 1 and 2 each has 45% to be chosen.
-        self.array = np.random.choice(choices, (n, n), p=probs) # this line randomly assigns 0 / 1 / 2 to every cell
+        # Use a supplied layout, or generate a random grid.
+        if initial_layout is None:
+            self.array = np.random.choice(choices, (n, n), p=probs) # this line randomly assigns 0 / 1 / 2 to every cell
+        else:
+            self.array = np.array(initial_layout, dtype=np.int8, copy=True)
+            if self.array.shape != (n, n):
+                raise ValueError("initial_layout must be a square array of shape (n, n)")
 
         # The line above randomly assigned 0 (empty), 1 or 2 to every cell; now collect the information for each person
         # Dictionary: key = location, for example (3, 5) value = Person object
@@ -173,6 +179,35 @@ class Schelling(Cell2D):
         self.m = m
         self.marriage_limit = int(len(self.people) * m)
         self.marriages_done = 0
+
+    def check_initialization(self):
+        """Check a newly created model before any simulation steps."""
+
+        occupied = set(locs_where(self.array != 0))
+        ids = {person.id for person in self.people.values()}
+
+        locations_match = set(self.people) == occupied
+
+        records_match = locations_match and all(
+            person.loc == loc and person.group == self.array[loc]
+            for loc, person in self.people.items()
+        )
+
+        return {
+            "Only initial states (0, 1, 2)": set(np.unique(self.array)) <= {0, 1, 2},
+
+            "Population matches occupied cells": len(self.people) == len(occupied),
+
+            "Unique agent IDs": len(ids) == len(self.people),
+
+            "Grid and agent records agree": records_match,
+
+            "ID lookup agrees with agent records": set(self.people_by_id) == ids and all(self.people_by_id.get(person.id) is person for person in self.people.values()),
+
+            "Marriage limit is correct": self.marriage_limit == int(len(self.people) * self.m),
+
+            "No marriages yet": self.marriages_done == 0,
+        }
 
     def get_person_info(self, person_id):
         """Find a Person by ID and return that person's information."""
@@ -278,17 +313,244 @@ class Schelling(Cell2D):
         return np.nanmean(frac_same)
 
     def update_happiness(self, satisfaction):
-        """Update each Person's satisfaction and happy state."""
+        """Update satisfaction and happiness for every person."""
         # Update every person's satisfaction and happiness
 
         for loc, person in self.people.items():
-
             # satisfaction is how satisfied the person is at their current location
-            score = satisfaction[loc]
-            person.satisfaction = float(score)
+            person.update_happiness(satisfaction[loc], self.p)
 
-            # update whether each person is happy
-            person.happy = bool(score >= self.p)
+    def check_satisfaction(self, expected_scores):
+        """Compare model results with scores calculated by hand."""
+        _, _, _, _, satisfaction = self.count_neighbors()
+        self.update_happiness(satisfaction)
+        self.update_neighbors(advance_round=False)
+
+        checks = {}
+
+        for loc, expected in expected_scores.items():
+            info = self.people[loc].get_info()
+
+            checks[f"Satisfaction at {loc}"] = bool(np.isclose(info["satisfaction"], expected, rtol=0, atol=1e-12))
+
+            checks[f"Happiness at {loc}"] = (info["happy"] == (expected >= self.p))
+
+        return checks
+
+    def check_relocation(self):
+        """Run one step with m=0 and check relocation."""
+        if self.m != 0:
+            raise ValueError("Use m=0 for relocation checks.")
+
+        # Calculate happiness before moving
+        _, _, _, _, satisfaction = self.count_neighbors()
+        self.update_happiness(satisfaction)
+
+        # Save each agent's information before moving
+        before = {person.id: person.get_info() for person in self.people.values()}
+        empty_before = int(np.sum(self.array == 0))
+
+        # Use the existing simulation step
+        self.step()
+
+        same_ids = set(before) == set(self.people_by_id)
+
+        happy_stay = same_ids and all(self.people_by_id[pid].loc == info["loc"] for pid, info in before.items() if info["happy"])
+
+        if empty_before > 0:
+            unhappy_correct = same_ids and all(self.people_by_id[pid].loc != info["loc"] for pid, info in before.items() if not info["happy"]
+            )
+        else:
+            unhappy_correct = same_ids and all(self.people_by_id[pid].loc == info["loc"] for pid, info in before.items() if not info["happy"]
+            )
+
+        residents_unchanged = same_ids and all(self.people_by_id[pid].group == info["group"] for pid, info in before.items())
+
+        occupied = set(locs_where(self.array != 0))
+        records_match = (
+            set(self.people) == occupied
+            and len(self.people) == len(self.people_by_id)
+            and all(person.loc == loc
+                    and person.group == self.array[loc]
+                    and self.people_by_id.get(person.id) is person for loc, person in self.people.items())
+        )
+
+        return {
+            "Happy agents stay": bool(happy_stay),
+            "Unhappy agents follow the vacancy rule":
+                bool(unhappy_correct),
+            "Agent IDs and groups unchanged":
+                bool(residents_unchanged),
+            "Empty-cell count unchanged":
+                empty_before == int(np.sum(self.array == 0)),
+            "Grid and agent records agree": bool(records_match)
+        }
+
+    def check_marriage(self, pair_locations):
+        """Check marriage rules on a fresh p=0, m=1 test grid."""
+        if self.p != 0 or self.m != 1 or self.marriages_done != 0:
+            raise ValueError("Use a fresh test grid with p=0 and m=1.")
+        if self.fixed_openness is None or self.fixed_openness <= 0:
+            raise ValueError("Use positive fixed_openness for this check.")
+
+        test_pairs = [(self.people[a].id, self.people[b].id) for a, b in pair_locations.values()]
+        ab_openness = min(self.people[loc].openness for loc in pair_locations["AB"])
+        old_ids = set(self.people_by_id)
+        old_locations = set(self.people)
+        _, _, _, _, scores = self.count_neighbors()
+        self.update_happiness(scores)
+
+        # No eligible pairs during the first two neighbour rounds
+        rounds_ok = True
+        for _ in range(2):
+            self.update_neighbors()
+            rounds_ok = rounds_ok and not self.find_all_candidate_pairs()
+
+        # Six singles have 15 possible pairs after round three
+        self.update_neighbors()
+        possible_pairs = self.find_all_candidate_pairs()
+        rounds_ok = rounds_ok and len(possible_pairs) == 15
+
+        # An unhappy single must be excluded
+        person = self.people_by_id[test_pairs[0][0]]
+        person.happy = False
+        blocked = self.find_all_candidate_pairs()
+        unhappy_ok = (len(blocked) == 10 and all(person.id not in pair for pair in blocked))
+        person.happy = True
+
+        # Selected pairs must be valid and must not share an agent
+        selected = self.choose_marriage_pairs(possible_pairs)
+        selected_ids = [pid for pair in selected for pid in pair]
+        selection_ok = (len(selected) == 3 and len(selected_ids) == len(set(selected_ids))and set(selected) <= set(possible_pairs))
+
+        # m=0 must prevent selection, even when the limit allows marriage
+        self.m = 0
+        zero_m_ok = self.choose_marriage_pairs(possible_pairs) == []
+        self.m = 1
+
+        # Check selection and completion at the marriage limit
+        original_limit = self.marriage_limit
+        self.marriage_limit = 1
+        cap_ok = len(self.choose_marriage_pairs(possible_pairs)) == 1
+
+        self.marriage_limit = 0
+        cap_ok = cap_ok and self.choose_marriage_pairs(possible_pairs) == []
+        stopped = self.complete_marriages(test_pairs)
+        cap_ok = (cap_ok and stopped == 0 and self.marriages_done == 0 and set(self.people_by_id) == old_ids and set(self.people) == old_locations)
+        self.marriage_limit = original_limit
+
+        # Compare AA and AB pairs that share one A agent
+        same_pair = test_pairs[0]
+        cross_pair = tuple(sorted((same_pair[0], test_pairs[1][0])))
+        pair_options = [same_pair, cross_pair]
+
+        saved_openness = {
+            pid: person.openness
+            for pid, person in self.people_by_id.items()
+        }
+        saved_random_state = np.random.get_state()
+        shares = {}
+
+        for openness in (0.1, 1.0):
+            for person in self.people.values():
+                person.openness = openness
+
+            cross_count = 0
+            for seed in range(600):
+                np.random.seed(seed)
+                chosen = self.choose_marriage_pairs(pair_options)
+                cross_count += cross_pair in chosen
+
+            shares[openness] = cross_count / 600
+
+        # Restore the original settings
+        for pid, openness in saved_openness.items():
+            self.people_by_id[pid].openness = openness
+        np.random.set_state(saved_random_state)
+
+        weighting_ok = (
+            shares[0.1] < 0.04
+            and 0.40 < shares[1.0] < 0.60
+        )
+
+        # Specified pairs guarantee that AA, BB and AB are all tested
+        completed = self.complete_marriages(test_pairs)
+        types = {"AA": 3, "BB": 4, "AB": 5}
+        child_types = {"AA": (1,), "BB": (2,), "AB": (1, 2)}
+        household_checks = {}
+
+        for (name, locations), ids in zip(pair_locations.items(), test_pairs):
+            agents = [self.people[loc] for loc in locations]
+            households = [p for p in agents if p.group in (3, 4, 5)]
+            singles = [p for p in agents if p.group in (1, 2)]
+            correct = len(households) == 1 and len(singles) == 1
+
+            if correct:
+                household, single = households[0], singles[0]
+                openness_ok = (np.isclose(household.openness, ab_openness) if name == "AB" else household.openness is None)
+                correct = (
+                    household.group == types[name]
+                    and single.group in child_types[name]
+                    and set(household.member_ids) == set(ids)
+                    and openness_ok
+                    and np.isclose(single.openness, self.fixed_openness)
+                )
+
+            household_checks[f"{name} household and new single"] = bool(correct)
+
+        # Existing households must not become marriage candidates
+        # Retry old IDs while the marriage limit still allows more
+        array_before = self.array.copy()
+        ids_before = set(self.people_by_id)
+        counter_before = self.marriages_done
+
+        single_id = next(
+            person.id for person in self.people.values()
+            if person.group in (1, 2)
+        )
+
+        invalid_pairs = test_pairs + [(single_id, test_pairs[0][0])]
+        skipped = self.complete_marriages(invalid_pairs)
+
+        invalid_pairs_ok = (
+            counter_before < self.marriage_limit
+            and skipped == 0
+            and self.marriages_done == counter_before
+            and set(self.people_by_id) == ids_before
+            and np.array_equal(self.array, array_before)
+        )
+        _, _, _, _, scores = self.count_neighbors()
+        self.update_happiness(scores)
+        for _ in range(3):
+            self.update_neighbors()
+
+        new_pairs = self.find_all_candidate_pairs()
+        singles_only = (
+            len(new_pairs) == 3
+            and all(self.people_by_id[pid].group in (1, 2) for pair in new_pairs for pid in pair)
+        )
+
+        records_ok = (
+            old_ids.isdisjoint(self.people_by_id)
+            and set(self.people) == old_locations
+            and set(locs_where(self.array != 0)) == old_locations
+            and len(self.people) == len(self.people_by_id) == len(old_ids)
+            and all(person.loc == loc
+                and person.group == self.array[loc]
+                and self.people_by_id.get(person.id) is person for loc, person in self.people.items()
+            )
+        )
+
+        checks = {
+            "Marriage eligibility": bool(rounds_ok and unhappy_ok and singles_only),
+            "Pair selection and marriage limit": bool(selection_ok and zero_m_ok and cap_ok)
+        }
+        checks["Openness affects pair selection"] = bool(weighting_ok)
+        checks["Invalid pairs are skipped"] = bool(invalid_pairs_ok)
+        checks.update(household_checks)
+        checks["Marriage counter"] = completed == self.marriages_done == 3
+        checks["Grid and agent records"] = bool(records_ok)
+        return checks
 
     def update_neighbors(self, advance_round=True):
         """Update every Person's current neighbors."""
